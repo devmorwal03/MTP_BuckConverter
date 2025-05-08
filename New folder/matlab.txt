@@ -1,0 +1,84 @@
+% Load and preprocess the data
+function df_scaled = preprocess_data(df)
+    % Remove outliers using IQR method
+    Q1 = quantile(df, 0.25);
+    Q3 = quantile(df, 0.75);
+    IQR = Q3 - Q1;
+    outlier_mask = ~(df < (Q1 - 1.5 * IQR)) & ~(df > (Q3 + 1.5 * IQR));
+    df = df(all(outlier_mask, 2), :);
+
+    % Feature engineering
+    df.Voltage_RMS_to_Mean_Ratio = df.Voltage_RMS ./ df.Voltage_Mean;
+    df.Duty_RMS_to_Mean_Ratio = df.Duty_RMS ./ df.Duty_Mean;
+    df.Voltage_Duty_Interaction = df.Voltage_Mean .* df.Duty_Mean;
+
+    % Calculate derivatives
+    df.Voltage_RMS_derivative = gradient(df.Voltage_RMS);
+    df.Duty_RMS_derivative = gradient(df.Duty_RMS);
+
+    % Normalize data
+    scaler = @(x) (x - min(x)) ./ (max(x) - min(x));
+    df_scaled = varfun(scaler, df);
+
+    % Create time-based features
+    time = (1:size(df_scaled, 1))';
+    sin_time = sin(2 * pi * time / size(df_scaled, 1));
+    cos_time = cos(2 * pi * time / size(df_scaled, 1));
+    
+    df_scaled.time = time;
+    df_scaled.sin_time = sin_time;
+    df_scaled.cos_time = cos_time;
+end
+
+% Load the data
+data = readtable('DataSetfinal.csv');
+preprocessed_data = preprocess_data(data);
+
+% Split features and target
+X = removevars(preprocessed_data, 'Ilf_Mean');
+y = preprocessed_data.Ilf_Mean;
+
+% Split the data into training and testing sets
+cv = cvpartition(size(X, 1), 'HoldOut', 0.2);
+X_train = X(training(cv), :);
+X_test = X(test(cv), :);
+y_train = y(training(cv), :);
+y_test = y(test(cv), :);
+
+% Create and train the Random Forest model
+rf_model = TreeBagger(100, X_train, y_train, 'Method', 'regression', 'OOBPrediction', 'on');
+
+% Make predictions
+y_pred = predict(rf_model, X_test);
+
+% Calculate MSE and R-squared
+mse = mean((y_test - y_pred).^2);
+r2 = 1 - sum((y_test - y_pred).^2) / sum((y_test - mean(y_test)).^2);
+
+fprintf('Mean Squared Error: %.4f\n', mse);
+fprintf('R-squared Score: %.4f\n', r2);
+
+% Feature importance
+[importance, feature_names] = rf_model.OOBPermutedPredictorDeltaError();
+[sorted_importance, idx] = sort(importance, 'descend');
+top_features = feature_names(idx(1:10));
+
+% Plot feature importance
+figure;
+bar(sorted_importance(1:10));
+xticks(1:10);
+xticklabels(top_features);
+xtickangle(45);
+title('Top 10 Feature Importances');
+xlabel('Features');
+ylabel('Importance');
+
+% Scatter plot of predicted vs actual values
+figure;
+scatter(y_test, y_pred, 'filled', 'MarkerFaceAlpha', 0.5);
+hold on;
+plot([min(y_test), max(y_test)], [min(y_test), max(y_test)], 'r--', 'LineWidth', 2);
+xlabel('Actual Values');
+ylabel('Predicted Values');
+title('Actual vs Predicted Ilf\_Mean');
+hold off;
